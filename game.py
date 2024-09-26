@@ -1,5 +1,5 @@
 from typing import Type
-import typing
+import typing 
 from enum import Enum
 import numpy as np
 

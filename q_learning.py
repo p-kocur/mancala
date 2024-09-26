@@ -1,6 +1,6 @@
 import numpy as np
 import random
-import os
+import os 
 import matplotlib.pyplot as plt
 os.environ["KERAS_BACKEND"] = "tensorflow"
 import tensorflow as tf
@@ -18,7 +18,7 @@ def value(q, s):
     # Your code here (COPY FROM HW9)
     actions = [a for a in q.actions if s[0, 0, a] != 0]
     values = []
-    for a in q.actions:
+    for a in actions:
         values.append(q.get(s, a))
     return max(values)
  
@@ -63,6 +63,30 @@ def Q_learn(mdp, q, lr=.1, iters=100, eps = 0.5, interactive_fn=None):
         s = s_prime
         if interactive_fn: interactive_fn(q, i)
     return q
+
+def Q_learn_batch(mdp, q, lr=.1, iters=100, eps=0.5,
+                  episode_length=100, n_episodes=2,
+                  interactive_fn=None):
+    # Your code here
+    all_experience = []
+    for i in range(iters):
+        for _ in range(n_episodes):
+            _, episode = sim_episode(mdp, episode_length, lambda s: epsilon_greedy(q, s, eps))
+            all_experience.extend(episode)
+        all_q_targets = []
+        for experience in all_experience:
+            s, a, r, s_prime, player = experience
+            if player == None:
+                future_val = 0
+            elif player == 0:
+                future_val = value(q, s_prime)
+            else:
+                future_val = -value(q, s_prime)
+            all_q_targets.append((s, a, r + mdp.discount_factor*future_val))
+        q.update(all_q_targets, lr)
+    return q
+            
+
   
 def make_nn(state_dim, num_hidden_layers, num_units):
     model = Sequential()
@@ -114,26 +138,23 @@ def sim_episode(mdp, episode_length, policy, draw=False):
     episode = []
     reward = 0
     s = mdp.init_state()
-    all_states = [s]
     for i in range(int(episode_length)):
-        mdp.board.print_board()
         a = policy(s)
         if mdp.terminal():
             (r, s_prime) = mdp.sim_transition(a)
-            reward += r
+            episode.append((s, a, r, None, None))
             break
         (r, s_prime) = mdp.sim_transition(a)
         reward += r
-        
-        (r, s) = mdp.sim_transition(rnd_choice(s_prime))
-        all_states.append(s)
-    #animation = animate(all_states, mdp.n, episode_length) if draw else None
-    return reward, episode, 0
+        episode.append((s, a, r, s_prime, mdp.player))
+        s = s_prime
+
+    return reward, episode
     
     
-def test_learn_play(num_layers = 10, num_units = 100,
-                    eps = 0.5, iters = 10000,
-                    num_episodes = 10, episode_length = 100):
+def test_learn_play(num_layers = 3, num_units = 100,
+                    eps = 0.5, iters = 100,
+                    num_episodes = 100, episode_length = 100):
       
     iters_per_value = 1 if iters <= 10 else int(iters / 10.0)
     scores = []
@@ -148,7 +169,8 @@ def test_learn_play(num_layers = 10, num_units = 100,
     q = NNQ(game.states, game.actions, num_layers, num_units,
                 epochs=1)
     
-    qf = Q_learn(game, q, iters=iters, interactive_fn=None)
+    #qf = Q_learn(game, q, iters=iters, interactive_fn=None)
+    qf = Q_learn_batch(game, q, iters=iters)
     
     if scores:
         # Plot learning curve
