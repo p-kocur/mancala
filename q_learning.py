@@ -4,6 +4,7 @@ import os
 import matplotlib.pyplot as plt
 os.environ["KERAS_BACKEND"] = "tensorflow"
 import tensorflow as tf
+tf.config.optimizer.set_jit(True)
 import keras
 from keras.models import Sequential # type: ignore
 from keras.optimizers import Adam # type: ignore
@@ -17,10 +18,12 @@ from game import Game
 def value(q, s):
     # Your code here (COPY FROM HW9)
     actions = [a for a in q.actions if s[0, 0, a] != 0]
-    values = []
+    maximum = -np.inf
     for a in actions:
-        values.append(q.get(s, a))
-    return max(values)
+        v = q.get(s, a)
+        if v > maximum:
+            maximum = v
+    return maximum
  
 # Given a state, return the action that is greedy with reespect to the
 # current definition of the q function
@@ -65,13 +68,13 @@ def Q_learn(mdp, q, lr=.1, iters=100, eps = 0.5, interactive_fn=None):
     return q
 
 def Q_learn_batch(mdp, q, lr=.1, iters=100, eps=0.5,
-                  episode_length=100, n_episodes=2,
+                  episode_length=100, n_episodes=1,
                   interactive_fn=None):
     # Your code here
     all_experience = []
     for i in range(iters):
         for _ in range(n_episodes):
-            _, episode = sim_episode(mdp, episode_length, lambda s: epsilon_greedy(q, s, eps))
+            episode = sim_episode(mdp, episode_length, lambda s: epsilon_greedy(q, s, eps))
             all_experience.extend(episode)
         all_q_targets = []
         for experience in all_experience:
@@ -104,27 +107,28 @@ class NNQ:
         self.epochs = epochs
         state_dim = self.states.size
         self.models = [make_nn(state_dim, num_layers, num_units) for _ in range(len(actions))]              # Your code here
+        self.predictors = []
+        for i in range(6):
+            @tf.function(reduce_retracing=True)
+            def f(x):
+                return self.models[i](x)
+            self.predictors.append(f)
     def get(self, s, a):
         # Your code here
-        return self.models[self.actions.index(a)].predict(tf.convert_to_tensor(s), verbose=0)
+        return self.predictors[a](s)
     def update(self, data, lr, epochs=1):
         # Your code here
-        X_all = [np.zeros((1, len(self.states))) for _ in range(len(self.actions))]
-        Y_all = [np.zeros((1, 1)) for _ in range(len(self.actions))]
-        a_idxs = set()
+        
+        X_all = [[] for _ in range(6)]
+        Y_all = [[] for _ in range(6)]
         for each in data:
             s, a, t = each
+            X_all[a].append(s)
+            Y_all[a].append(np.array([[np.squeeze(t)]]))
             
-            a_idxs.add(self.actions.index(a))
-            if not np.any(X_all[self.actions.index(a)]):
-                Y_all[self.actions.index(a)] = np.array([[np.squeeze(t)]])
-                X_all[self.actions.index(a)] = s
-            else:
-                Y_all[self.actions.index(a)] = np.append(Y_all[self.actions.index(a)], np.array([[np.squeeze(t)]]), 0)
-                X_all[self.actions.index(a)] = np.append(X_all[self.actions.index(a)], s, 0)
-            
-        for i in list(a_idxs):
-            self.models[i].fit(tf.convert_to_tensor(np.array(X_all[i])), tf.convert_to_tensor(np.array(Y_all[i])), epochs=epochs, verbose=0)
+        for i in range(6):
+            self.models[i].fit(X_all[i], Y_all[i], epochs=epochs)
+            #self.models[i].train_on_batch(np.array(X_all[i]), np.array(Y_all[i]))
         
         return
    
@@ -136,24 +140,23 @@ def rnd_choice(s):
     
 def sim_episode(mdp, episode_length, policy, draw=False):
     episode = []
-    reward = 0
     s = mdp.init_state()
     for i in range(int(episode_length)):
         a = policy(s)
+        print(i)
         if mdp.terminal():
             (r, s_prime) = mdp.sim_transition(a)
             episode.append((s, a, r, None, None))
             break
         (r, s_prime) = mdp.sim_transition(a)
-        reward += r
         episode.append((s, a, r, s_prime, mdp.player))
         s = s_prime
 
-    return reward, episode
+    return episode
     
     
-def test_learn_play(num_layers = 3, num_units = 100,
-                    eps = 0.5, iters = 100,
+def test_learn_play(num_layers = 2, num_units = 50,
+                    eps = 0.5, iters = 50,
                     num_episodes = 100, episode_length = 100):
       
     iters_per_value = 1 if iters <= 10 else int(iters / 10.0)
